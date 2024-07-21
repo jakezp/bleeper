@@ -9,11 +9,13 @@ import string
 import whisperx
 import torch
 
+# Function to load a list of swear words from a file
 def load_swear_words(file_path):
     with open(file_path, 'r') as file:
         words = file.read().splitlines()
     return set(words)
 
+# Function to get video name and extension from file path
 def get_video_name(video_file):
     video_name, video_ext = os.path.splitext(os.path.basename(video_file))
     input_video = f"input_{video_name}{video_ext}"
@@ -23,10 +25,12 @@ def get_video_name(video_file):
     in_video_name, in_video_ext = os.path.splitext(os.path.basename(input_video))
     return video_name, video_ext, input_video, in_video_name, in_video_ext, out_video_name, out_video_ext
 
+# Function to list audio streams in the input video
 def list_audio_streams(input_video):
     probe = ffmpeg.probe(input_video)
     return [stream for stream in probe['streams'] if stream['codec_type'] == 'audio']
 
+# Function to get information about audio streams
 def get_audio_streams_info(input_video):
     audio_streams = list_audio_streams(input_video)
     audio_streams_info = []
@@ -41,6 +45,7 @@ def get_audio_streams_info(input_video):
         audio_streams_info.append(stream_info)
     return audio_streams_info
 
+# Function to prompt user to select an audio stream
 def prompt_user_to_select_stream(audio_streams):
     num_streams = len(audio_streams)
     if num_streams == 1:
@@ -61,6 +66,7 @@ def prompt_user_to_select_stream(audio_streams):
             except ValueError:
                 print("Invalid input. Please enter a number.")
 
+# Function to match channel layout to a list of channel abbreviations
 def match_channel_layout(layout):
     layouts = {
     "mono": ["FC"],
@@ -98,10 +104,12 @@ def match_channel_layout(layout):
     else:
         return None
 
+# Function to extract individual audio channels from the selected stream
 def extract_channels(in_video_name, input_video, selected_stream_index, output_prefix=None, output_files=None):
     output_prefix = in_video_name
     audio_streams = list_audio_streams(input_video)
     selected_stream = audio_streams[selected_stream_index]
+    # Get audio stream individual values
     layout = selected_stream['channel_layout']
     num_channels = selected_stream['channels']
     channels = match_channel_layout(layout)
@@ -115,6 +123,7 @@ def extract_channels(in_video_name, input_video, selected_stream_index, output_p
 
     try:
         if layout in ["mono", "stereo", "2.1", "3.0", "3.0(back)"]:
+            # For mono or stereo, copy the entire stream without splitting
             output_file = f"{output_prefix}_{layout}.{codec_name}"
             ffmpeg_cmd = [
                 "ffmpeg",
@@ -141,7 +150,7 @@ def extract_channels(in_video_name, input_video, selected_stream_index, output_p
             ]
             for i, channel in enumerate(channels):
                 ffmpeg_cmd.extend(["-map", f"[{channel}]", "-b:a", audio_bit_rate,  "-ac", "1", output_files[i]])
-            # print(f"ffmpeg command: {ffmpeg_cmd}") # Debug
+            # Debug - print(f"ffmpeg command: {ffmpeg_cmd}") 
             subprocess.run(ffmpeg_cmd, check=True)
             
             for file in output_files:
@@ -161,6 +170,7 @@ def extract_channels(in_video_name, input_video, selected_stream_index, output_p
         print(f"Error extracting channels: {e}")
         return
 
+# Function to call whisperx to generate transcript and word timestamps
 def run_whisperx(channel_file, in_video_name):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     language = "en"
@@ -173,10 +183,12 @@ def run_whisperx(channel_file, in_video_name):
     model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
     result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
     
+    # Save the transcript and word timestamps to a JSON file
     json_file = f"{in_video_name}.json"
     with open(json_file, "w") as f:
         json.dump(result, f, indent=4)
 
+    # Save the transcript and word timestamps to an SRT file
     srt_file = f"{in_video_name}.srt"
     with open(srt_file, "w", encoding="utf-8") as f:
         for i, segment in enumerate(result["segments"], start=1):
@@ -186,6 +198,7 @@ def run_whisperx(channel_file, in_video_name):
             f.write(f"{i}\n{start_time} --> {end_time}\n{text}\n\n")
     return in_video_name
 
+# Function to format timestamp to SRT format
 def format_timestamp(seconds):
     milliseconds = int((seconds % 1) * 1000)
     seconds = int(seconds)
@@ -193,6 +206,7 @@ def format_timestamp(seconds):
     minutes, seconds = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 
+# Function to get audio properties
 def get_audio_properties(channel_file):
     result = subprocess.run(
         ['ffprobe', '-loglevel', '0', '-print_format', 'json', '-show_format', '-show_streams', channel_file],
@@ -207,11 +221,13 @@ def get_audio_properties(channel_file):
     format_bitrate = int(info['format']['bit_rate'])
     return sample_rate, codec_name, channels, duration, format_name, format_bitrate
 
+# Function to load an SRT file
 def load_srt(in_video_name):
     input_srt = (f"{in_video_name}.srt")
     with open(input_srt, 'r', encoding='utf-8') as file:
         return file.readlines()
 
+# Function to replace filter words in SRT file
 def replace_words_in_srt(lines, swear_words):
     pattern = re.compile(r'\b(' + '|'.join(re.escape(word) for word in swear_words) + r')\b', re.IGNORECASE)
     modified_lines = []
@@ -221,6 +237,7 @@ def replace_words_in_srt(lines, swear_words):
         modified_lines.append(line)
     return modified_lines
 
+# Function to save the redacted SRT file
 def save_srt(out_video_name, lines):
     output_srt = (f"{out_video_name}_modified.srt")
     print (f"{output_srt}")
@@ -228,6 +245,7 @@ def save_srt(out_video_name, lines):
         file.writelines(lines)
     return output_srt
 
+# Function to collect timestamps of all filter words from JSON file
 def identify_swearing_timestamps(in_video_name, swear_words):
     timestamp_file = (f"{in_video_name}.json")
     with open(timestamp_file) as f:
@@ -242,6 +260,7 @@ def identify_swearing_timestamps(in_video_name, swear_words):
                 swear_timestamps.append({"start": start_time, "end": end_time})
     return swear_timestamps
 
+# Function to get the inverse of the filter words timestamps
 def get_non_swearing_intervals(swear_timestamps, duration):
     non_swearing_intervals = []
     if not swear_timestamps:
@@ -261,6 +280,7 @@ def get_non_swearing_intervals(swear_timestamps, duration):
         non_swearing_intervals.append({'start': swear_timestamps[-1]['end'], 'end': duration})
     return non_swearing_intervals
 
+# Function to generate the ffmpeg complex filter, to redact filter words
 def create_ffmpeg_filter(swear_timestamps, non_swearing_intervals):
     dipped_vocals_conditions = '+'.join([f"between(t,{b['start']},{b['end']})" for b in swear_timestamps])
     dipped_vocals_filter = f"[0]volume=0:enable='{dipped_vocals_conditions}'[main]"
@@ -277,6 +297,7 @@ def create_ffmpeg_filter(swear_timestamps, non_swearing_intervals):
     ])
     return filter_complex
 
+# Function to apply complext filter to voice audio stream
 def apply_complex_filter(channel_file, filter_complex, format_bitrate=None):
     bitrate = format_bitrate
     channel_file_name, channel_file_ext = os.path.splitext(os.path.basename(channel_file))
@@ -294,6 +315,7 @@ def apply_complex_filter(channel_file, filter_complex, format_bitrate=None):
     modified_audio_stream = modified_fc_channel_file
     return modified_fc_channel_file, modified_audio_stream
 
+# Function to combine modified center channel audio file with the remaining channel audio files into a multi-channel audio stream
 def combine_multi_channel_audio(layout, out_video_name, audio_bit_rate, output_files, modified_fc_channel_file):
     modified_audio_stream = f"{out_video_name}_modified.ac3"
     center_channel_file = next((f for f in output_files if "_FC" in os.path.basename(f)), None)
@@ -336,6 +358,7 @@ def combine_multi_channel_audio(layout, out_video_name, audio_bit_rate, output_f
         print("Channel file not found")
         return None    
 
+# Function to add the updated audio and subtitile streams to the container file
 def replace_channel(out_video_name, out_video_ext, input_video, modified_audio_stream, audio_start_time, output_srt):
     final_video = f"{out_video_name}.mkv"
     ffmpeg_cmd = [
@@ -366,22 +389,25 @@ def replace_channel(out_video_name, out_video_ext, input_video, modified_audio_s
     subprocess.run(ffmpeg_cmd, check=True)
     return final_video
 
+# Function to clean up temporary files
 def cleanup_temp_files(input_video, in_video_name, output_srt, channel_file, modified_fc_channel_file, modified_audio_stream, output_files=None):
-    video_name, _ = os.path.splitext(os.path.basename(input_video))
 
+    # List of files and directories to remove
     temp_files = [
         f"{in_video_name}.json",
-        f"{in_video_name}.srt",
+        #f"{in_video_name}.srt",
         input_video,
-        output_srt,
+        #output_srt,
         channel_file,
         modified_fc_channel_file,
         modified_audio_stream
     ]
 
+    # Add channel files and directories from output_files if exist
     if output_files:
         temp_files.extend(output_files)
 
+    # Delete temp files
     for item in temp_files:
         try:
             if os.path.isfile(item):
@@ -391,6 +417,7 @@ def cleanup_temp_files(input_video, in_video_name, output_srt, channel_file, mod
         except OSError as e:
             print(f"Error: {e.strerror} - {e.filename}")
 
+# Main functiom
 def main(video_file):
     swear_words_file = "filter_words.txt"
     swear_words = load_swear_words(swear_words_file)
@@ -412,6 +439,7 @@ def main(video_file):
     output_srt = save_srt(out_video_name, modified_lines)
     print(f"Processed audio channel saved as {modified_fc_channel_file} and SRT subtitle file as {output_srt}.")
 
+    # Combine multi-channel audio stream and replace channel in the container file
     if layout in ["mono", "stereo", "2.1", "3.0", "3.0(back)"]:
         final_video = replace_channel(out_video_name, out_video_ext, input_video, modified_audio_stream, audio_start_time, output_srt)
         print(f"Completed {final_video} conversion.")
